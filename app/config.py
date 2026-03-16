@@ -19,8 +19,6 @@ class Settings(BaseSettings):
 
     # S3
     aws_region: str = "us-west-2"
-    aws_access_key_id: str = ""
-    aws_secret_access_key: str = ""
     s3_bucket: str = "openclaw-manager"
     s3_prefix: str = "dev/"
 

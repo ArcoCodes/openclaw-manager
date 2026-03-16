@@ -34,8 +34,8 @@ class SandboxService:
 
         # 2. Create E2B sandbox (sync SDK → thread)
         sandbox = await asyncio.to_thread(
-            Sandbox,
-            template=template,
+            Sandbox.create,
+            template,
             timeout=timeout,
             envs={
                 "SESSION_TOKEN": token,
@@ -47,8 +47,7 @@ class SandboxService:
         sandbox_id = sandbox.sandbox_id
 
         # 3. Get public URL
-        public_url = await asyncio.to_thread(sandbox.get_host, port)
-        public_url = f"https://{public_url}"
+        public_url = f"https://{sandbox.get_host(port)}"
 
         now = datetime.utcnow()
         meta = SandboxMetadata(
@@ -107,8 +106,7 @@ class SandboxService:
 
         # Refresh public URL
         port = settings.e2b_sandbox_port
-        public_url = await asyncio.to_thread(sandbox.get_host, port)
-        public_url = f"https://{public_url}"
+        public_url = f"https://{sandbox.get_host(port)}"
 
         meta.state = "running"
         meta.public_url = public_url

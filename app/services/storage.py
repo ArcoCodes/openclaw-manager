@@ -21,8 +21,6 @@ class StorageService:
         return self._session.create_client(
             "s3",
             region_name=settings.aws_region,
-            aws_access_key_id=settings.aws_access_key_id or None,
-            aws_secret_access_key=settings.aws_secret_access_key or None,
         )
 
     def _key(self, *parts: str) -> str:
