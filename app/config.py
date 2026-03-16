@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     environment: str = "dev"
-    http_port: int = 8000
+    http_port: int = 8888
     admin_secret_key: str = "changeme"
     log_level: str = "INFO"
 
@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     e2b_api_key: str = ""
     e2b_template_id: str = "base"
     e2b_sandbox_timeout: int = 86400
-    e2b_sandbox_port: int = 3000
+    e2b_sandbox_port: int = 18789
 
     # S3
     aws_region: str = "us-west-2"
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     renewal_interval_hours: int = 24
     renewal_check_minutes: int = 5
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()
