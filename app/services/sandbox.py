@@ -38,8 +38,8 @@ class SandboxService:
             template,
             timeout=timeout,
             envs={
-                "SESSION_TOKEN": token,
-                "CONTROL_PLANE_URL": settings.gateway_base_url,
+                "AI_API_KEY": token,
+                "AI_BASE_URL": settings.gateway_base_url,
                 "BLUEBUBBLES_SERVER_URL": settings.bluebubbles_server_url,
                 "BLUEBUBBLES_WEBHOOK_PATH": settings.bluebubbles_webhook_path,
                 "BLUEBUBBLES_PASSWORD": settings.bluebubbles_password,
