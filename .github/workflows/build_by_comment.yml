@@ -1,0 +1,157 @@
+name: Build
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or tag to build'
+        required: false
+        default: 'main'
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+jobs:
+  check-comment:
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+    runs-on: self-hosted-aws
+    outputs:
+      trigger_build: ${{ steps.check.outputs.trigger_build }}
+      ref_branch: ${{ steps.check.outputs.ref_branch }}
+    steps:
+      - name: Get PR details
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            core.setOutput('ref', pr.data.head.ref);
+
+      - name: Check comment
+        id: check
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          if [[ "$COMMENT_BODY" =~ ^/build[[:space:]]*$ ]] || [[ "$COMMENT_BODY" == "/build" ]]; then
+            echo "trigger_build=true" >> $GITHUB_OUTPUT
+            echo "ref_branch=${{ steps.pr.outputs.ref }}" >> $GITHUB_OUTPUT
+          else
+            echo "trigger_build=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: check-comment
+    if: |
+      always() &&
+      (needs.check-comment.result == 'skipped' || needs.check-comment.outputs.trigger_build == 'true')
+    runs-on: self-hosted-aws
+    env:
+      ECR_REGISTRY: 257394489443.dkr.ecr.us-west-2.amazonaws.com
+      ECR_REPOSITORY: openclaw/manager
+      REF_BRANCH: ${{ needs.check-comment.outputs.ref_branch || inputs.ref || github.ref_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF_BRANCH }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.ECR_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.ECR_AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Generate image tag
+        id: tag
+        run: |
+          BRANCH_NAME=$(echo "$REF_BRANCH" | sed 's/[^a-zA-Z0-9._-]/-/g')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          IMAGE_TAG="staging_${BRANCH_NAME}_${SHORT_SHA}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "Generated tag: $IMAGE_TAG"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Send Feishu notification
+        if: success()
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.OPENCLAW_FEISHU_WEBHOOK_URL }}
+        run: |
+          if [ -z "$FEISHU_WEBHOOK" ]; then
+            echo "Feishu webhook not configured, skipping notification"
+            exit 0
+          fi
+          curl -X POST "$FEISHU_WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "msg_type": "interactive",
+              "card": {
+                "config": { "wide_screen_mode": true },
+                "header": {
+                  "title": { "tag": "plain_text", "content": "OpenClaw Manager Build Success" },
+                  "template": "green"
+                },
+                "elements": [{
+                  "tag": "div",
+                  "text": {
+                    "tag": "lark_md",
+                    "content": "**Service**: manager\n**Branch**: '"$REF_BRANCH"'\n**Image**: '"${{ steps.tag.outputs.IMAGE_TAG }}"'\n**Commit**: '"${{ steps.tag.outputs.SHORT_SHA }}"'\n**Triggered by**: @'"${{ github.event.comment.user.login || github.actor }}"'"
+                  }
+                }]
+              }
+            }'
+
+      - name: Comment on PR with build result
+        if: success() && github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `**Build Success**\n\nImage Tag: \`${process.env.IMAGE_TAG}\`\nRegistry: \`${process.env.ECR_REGISTRY}/${process.env.ECR_REPOSITORY}\`\n\n\`\`\`bash\ndocker pull ${process.env.ECR_REGISTRY}/${process.env.ECR_REPOSITORY}:${process.env.IMAGE_TAG}\n\`\`\``
+            });
+        env:
+          IMAGE_TAG: ${{ steps.tag.outputs.IMAGE_TAG }}
+          ECR_REGISTRY: ${{ env.ECR_REGISTRY }}
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+
+      - name: Comment on PR with build failure
+        if: failure() && github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `**Build Failed**\n\nPlease check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).`
+            });
