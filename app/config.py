@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     s3_prefix: str = "dev/"
 
     # BlueBubbles
+    bluebubbles_server_url: str = ""
+    bluebubbles_webhook_path: str = "/bluebubbles-webhook"
     bluebubbles_password: str = ""
     forward_timeout_ms: int = 10000
     unknown_sender_callback_url: str = ""
