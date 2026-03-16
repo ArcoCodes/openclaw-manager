@@ -50,7 +50,16 @@ class SandboxService:
 
         sandbox_id = sandbox.sandbox_id
 
-        # 3. Get public URL
+        # 3. Run setup.sh (baked into template) in background
+        logger.info("Running setup.sh in sandbox %s", sandbox_id)
+        await asyncio.to_thread(
+            sandbox.commands.run,
+            "bash /opt/setup.sh",
+            background=True,
+            timeout=300,
+        )
+
+        # 4. Get public URL
         public_url = f"https://{sandbox.get_host(port)}"
 
         now = datetime.utcnow()
@@ -66,11 +75,11 @@ class SandboxService:
             last_renewed_at=now,
         )
 
-        # 4. Persist to S3
+        # 5. Persist to S3
         await self.storage.put_sandbox(meta)
         await self.storage.add_to_index(sandbox_id)
 
-        # 5. Update route mapping if apple_id provided
+        # 6. Update route mapping if apple_id provided
         if apple_id:
             await self._set_route(meta)
 

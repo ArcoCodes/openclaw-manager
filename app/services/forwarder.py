@@ -117,10 +117,15 @@ async def forward_to_sandbox(
     timeout_s = timeout_ms / 1000.0
     start = time.monotonic()
 
+    # Append the BlueBubbles webhook path + password so openclaw gateway accepts it
+    url = sandbox_url.rstrip("/") + settings.bluebubbles_webhook_path
+    if settings.bluebubbles_password:
+        url += f"?password={settings.bluebubbles_password}"
+
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             resp = await client.post(
-                sandbox_url,
+                url,
                 json=body if isinstance(body, dict) else {"payload": body},
                 headers={
                     "X-Sender-Key": sender_key,

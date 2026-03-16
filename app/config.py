@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     e2b_api_key: str = ""
     e2b_template_id: str = "base"
     e2b_sandbox_timeout: int = 86400
-    e2b_sandbox_port: int = 3000
+    e2b_sandbox_port: int = 18789
 
     # S3
     aws_region: str = "us-west-2"
