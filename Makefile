@@ -4,7 +4,8 @@ install:
 	pip install -r requirements.txt
 
 dev:
-	uvicorn main:app --reload --host 0.0.0.0 --port $${HTTP_PORT:-8000}
+	env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
+		python3 main.py
 
 lint:
 	ruff check .
@@ -14,4 +15,4 @@ docker-build:
 	docker build -t openclaw-manager .
 
 docker-run:
-	docker run --rm --env-file .env -p 8000:8000 openclaw-manager
+	docker run --rm --env-file .env -p 8888:8888 openclaw-manager

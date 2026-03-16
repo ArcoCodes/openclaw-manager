@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     environment: str = "dev"
-    http_port: int = 8000
+    http_port: int = 8888
     admin_secret_key: str = "changeme"
     log_level: str = "INFO"
 
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     renewal_interval_hours: int = 24
     renewal_check_minutes: int = 5
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()
