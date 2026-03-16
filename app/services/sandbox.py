@@ -40,6 +40,10 @@ class SandboxService:
             envs={
                 "SESSION_TOKEN": token,
                 "CONTROL_PLANE_URL": settings.gateway_base_url,
+                "BLUEBUBBLES_SERVER_URL": settings.bluebubbles_server_url,
+                "BLUEBUBBLES_WEBHOOK_PATH": settings.bluebubbles_webhook_path,
+                "BLUEBUBBLES_PASSWORD": settings.bluebubbles_password,
+                "BLUEBUBBLES_ALLOW_FROM": apple_id or "",
             },
             api_key=settings.e2b_api_key,
         )
