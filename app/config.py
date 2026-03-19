@@ -29,9 +29,11 @@ class Settings(BaseSettings):
     forward_timeout_ms: int = 10000
     unknown_sender_callback_url: str = ""
 
-    # Renewal
+    # Renewal & Idle
     renewal_interval_hours: int = 23
     renewal_check_minutes: int = 5
+    renewal_enabled: bool = False
+    idle_timeout_minutes: int = 10
 
     # Backup
     backup_interval_hours: int = 12

@@ -19,6 +19,55 @@ class SandboxService:
     def __init__(self, storage: StorageService, gateway: GatewayClient) -> None:
         self.storage = storage
         self.gateway = gateway
+        self._activity: dict[str, datetime] = {}
+        self._resume_locks: dict[str, asyncio.Lock] = {}
+
+    # ── Activity tracking ────────────────────────────────────
+
+    def record_activity(self, sandbox_id: str) -> None:
+        """Update in-memory last-active timestamp."""
+        self._activity[sandbox_id] = datetime.utcnow()
+
+    def get_last_active(self, sandbox_id: str) -> datetime | None:
+        return self._activity.get(sandbox_id)
+
+    async def ensure_running(self, sandbox_id: str) -> SandboxMetadata:
+        """If the sandbox is paused, resume it; otherwise return metadata."""
+        lock = self._resume_locks.setdefault(sandbox_id, asyncio.Lock())
+        async with lock:
+            meta = await self.storage.get_sandbox(sandbox_id)
+            if meta is None:
+                raise ValueError(f"Sandbox {sandbox_id} not found")
+            if meta.state == "paused":
+                meta = await self.resume(sandbox_id)
+            self.record_activity(sandbox_id)
+            return meta
+
+    async def flush_activity(self) -> None:
+        """Batch-persist in-memory activity timestamps to S3 metadata."""
+        for sandbox_id, last_active in list(self._activity.items()):
+            try:
+                meta = await self.storage.get_sandbox(sandbox_id)
+                if meta is None:
+                    continue
+                meta.last_active_at = last_active
+                await self.storage.put_sandbox(meta)
+            except Exception:
+                logger.exception("Failed to flush activity for %s", sandbox_id)
+
+    async def init_activity_tracker(self) -> None:
+        """Load last_active_at from S3 into memory on startup."""
+        try:
+            all_sandboxes = await self.list_all()
+        except Exception:
+            logger.exception("Failed to load sandboxes for activity tracker")
+            return
+        now = datetime.utcnow()
+        for meta in all_sandboxes:
+            if meta.state == "running":
+                self._activity[meta.sandbox_id] = meta.last_active_at or now
+
+    # ── CRUD ────────────────────────────────────────────────
 
     async def create(
         self,
@@ -108,6 +157,7 @@ class SandboxService:
         if apple_id:
             await self._set_route(meta)
 
+        self.record_activity(sandbox_id)
         logger.info("Created sandbox %s for %s", sandbox_id, email)
         return meta
 
@@ -129,6 +179,11 @@ class SandboxService:
 
         meta.state = "paused"
         await self.storage.put_sandbox(meta)
+
+        # Update route mapping state
+        if meta.apple_id:
+            await self._set_route(meta, state="paused")
+
         logger.info("Paused sandbox %s", sandbox_id)
         return meta
 
@@ -178,6 +233,10 @@ class SandboxService:
         # Remove route mapping
         if meta.apple_id:
             await self._remove_route(meta.apple_id)
+
+        # Clean up in-memory tracking
+        self._activity.pop(sandbox_id, None)
+        self._resume_locks.pop(sandbox_id, None)
 
         logger.info("Killed sandbox %s", sandbox_id)
         return meta
@@ -239,7 +298,9 @@ class SandboxService:
         )
         return meta
 
-    async def _set_route(self, meta: SandboxMetadata) -> None:
+    async def _set_route(
+        self, meta: SandboxMetadata, *, state: str = "running",
+    ) -> None:
         if not meta.apple_id:
             return
         mappings = await self.storage.get_route_mappings()
@@ -248,6 +309,7 @@ class SandboxService:
             sandbox_id=meta.sandbox_id,
             sandbox_url=meta.public_url,
             owner_email=meta.owner_email,
+            sandbox_state=state,
         )
         await self.storage.put_route_mappings(mappings)
 

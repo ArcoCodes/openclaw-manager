@@ -26,6 +26,7 @@ class SandboxMetadata(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_renewed_at: datetime = Field(default_factory=datetime.utcnow)
     last_backed_up_at: Optional[datetime] = None
+    last_active_at: Optional[datetime] = None
 
 
 class SandboxIndex(BaseModel):
@@ -43,6 +44,7 @@ class SandboxResponse(BaseModel):
     created_at: datetime
     last_renewed_at: datetime
     last_backed_up_at: Optional[datetime] = None
+    last_active_at: Optional[datetime] = None
 
 
 # ── Routes ───────────────────────────────────────────────
@@ -53,6 +55,7 @@ class RouteEntry(BaseModel):
     sandbox_id: str
     sandbox_url: str
     owner_email: str
+    sandbox_state: str = "running"
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
