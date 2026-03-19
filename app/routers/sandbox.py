@@ -17,6 +17,7 @@ def _to_response(meta) -> SandboxResponse:
         template_id=meta.template_id,
         created_at=meta.created_at,
         last_renewed_at=meta.last_renewed_at,
+        last_backed_up_at=meta.last_backed_up_at,
     )
 
 
@@ -73,6 +74,17 @@ async def resume_sandbox(sandbox_id: str):
 async def kill_sandbox(sandbox_id: str):
     try:
         meta = await sandbox_service.kill(sandbox_id)
+        return _to_response(meta)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/{sandbox_id}/backup")
+async def backup_sandbox(sandbox_id: str):
+    try:
+        meta = await sandbox_service.backup(sandbox_id)
         return _to_response(meta)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

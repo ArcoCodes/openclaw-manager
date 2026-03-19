@@ -25,6 +25,7 @@ class SandboxMetadata(BaseModel):
     template_id: str = "base"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_renewed_at: datetime = Field(default_factory=datetime.utcnow)
+    last_backed_up_at: Optional[datetime] = None
 
 
 class SandboxIndex(BaseModel):
@@ -41,6 +42,7 @@ class SandboxResponse(BaseModel):
     template_id: str
     created_at: datetime
     last_renewed_at: datetime
+    last_backed_up_at: Optional[datetime] = None
 
 
 # ── Routes ───────────────────────────────────────────────

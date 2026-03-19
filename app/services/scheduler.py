@@ -39,6 +39,26 @@ class RenewalScheduler:
                 except Exception:
                     logger.exception("Failed to renew sandbox %s", meta.sandbox_id)
 
+    async def _backup_check(self) -> None:
+        """Backup all running sandboxes to S3."""
+        logger.info("Running backup check")
+        try:
+            all_sandboxes = await self._sandbox_service.list_all()
+        except Exception:
+            logger.exception("Failed to list sandboxes for backup")
+            return
+
+        for meta in all_sandboxes:
+            if meta.state != "running":
+                continue
+            if not meta.apple_id:
+                continue
+            try:
+                await self._sandbox_service.backup(meta.sandbox_id)
+                logger.info("Backed up sandbox %s", meta.sandbox_id)
+            except Exception:
+                logger.exception("Failed to backup sandbox %s", meta.sandbox_id)
+
     def start(self) -> None:
         interval_minutes = settings.renewal_check_minutes
         self._scheduler.add_job(
@@ -48,8 +68,19 @@ class RenewalScheduler:
             id="sandbox_renewal",
             replace_existing=True,
         )
+        self._scheduler.add_job(
+            self._backup_check,
+            "interval",
+            hours=settings.backup_interval_hours,
+            id="sandbox_backup",
+            replace_existing=True,
+        )
         self._scheduler.start()
-        logger.info("Renewal scheduler started (every %d min)", interval_minutes)
+        logger.info(
+            "Scheduler started (renewal every %d min, backup every %d h)",
+            interval_minutes,
+            settings.backup_interval_hours,
+        )
 
     def stop(self) -> None:
         self._scheduler.shutdown(wait=False)

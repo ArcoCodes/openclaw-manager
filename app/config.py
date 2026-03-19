@@ -24,14 +24,18 @@ class Settings(BaseSettings):
 
     # BlueBubbles
     bluebubbles_server_url: str = ""
-    bluebubbles_webhook_path: str = "/bluebubbles-webhook"
+    bluebubbles_webhook_path: str = "/api/bluebubbles-webhook"
     bluebubbles_password: str = ""
     forward_timeout_ms: int = 10000
     unknown_sender_callback_url: str = ""
 
     # Renewal
-    renewal_interval_hours: int = 24
+    renewal_interval_hours: int = 23
     renewal_check_minutes: int = 5
+
+    # Backup
+    backup_interval_hours: int = 12
+    backup_sandbox_dir: str = "/home/user/.openclaw"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
