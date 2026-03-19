@@ -116,3 +116,36 @@ class StorageService:
             if meta is not None:
                 results.append(meta)
         return results
+
+    # ── userdata backup ──
+
+    async def upload_userdata(self, apple_id: str, data: bytes) -> None:
+        key = self._key("userdata", f"{apple_id}.tar.gz")
+        async with self._ctx() as client:
+            await client.put_object(
+                Bucket=settings.s3_bucket,
+                Key=key,
+                Body=data,
+                ContentType="application/gzip",
+            )
+
+    async def download_userdata(self, apple_id: str) -> Optional[bytes]:
+        key = self._key("userdata", f"{apple_id}.tar.gz")
+        async with self._ctx() as client:
+            try:
+                resp = await client.get_object(Bucket=settings.s3_bucket, Key=key)
+                return await resp["Body"].read()
+            except client.exceptions.NoSuchKey:
+                return None
+            except Exception:
+                logger.exception("S3 get userdata failed: %s", key)
+                return None
+
+    async def has_userdata(self, apple_id: str) -> bool:
+        key = self._key("userdata", f"{apple_id}.tar.gz")
+        async with self._ctx() as client:
+            try:
+                await client.head_object(Bucket=settings.s3_bucket, Key=key)
+                return True
+            except Exception:
+                return False

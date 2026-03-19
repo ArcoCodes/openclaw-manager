@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from app.config import settings
-from app.dependencies import storage
+from app.dependencies import sandbox_service, storage
 from app.services.forwarder import (
     extract_sender_info,
     forward_to_sandbox,
@@ -43,6 +43,25 @@ def _authenticate_bb(request: Request, body: dict[str, Any]) -> bool:
     return False
 
 
+async def _resume_and_forward(
+    sandbox_id: str,
+    body: dict[str, Any],
+    sender_key: str,
+    event_type: str | None,
+) -> None:
+    """Resume a paused sandbox then forward the webhook payload."""
+    try:
+        meta = await sandbox_service.ensure_running(sandbox_id)
+        await forward_to_sandbox(
+            sandbox_url=meta.public_url,
+            body=body,
+            sender_key=sender_key,
+            event_type=event_type,
+        )
+    except Exception:
+        logger.exception("Resume-and-forward failed for sandbox %s", sandbox_id)
+
+
 @router.post("/bluebubbles-webhook")
 async def bluebubbles_webhook(request: Request):
     body = await request.json()
@@ -61,16 +80,26 @@ async def bluebubbles_webhook(request: Request):
     route = mappings.mappings.get(sender.routing_key)
 
     if route:
-        # Fire-and-forget: forward asynchronously, respond immediately
-        asyncio.create_task(
-            forward_to_sandbox(
-                sandbox_url=route.sandbox_url,
-                body=body,
-                sender_key=sender.routing_key,
-                event_type=event_type,
+        if route.sandbox_state == "paused":
+            # Sandbox is paused — resume then forward
+            asyncio.create_task(
+                _resume_and_forward(
+                    route.sandbox_id, body, sender.routing_key, event_type,
+                )
             )
-        )
-        return {"status": "forwarded", "routingKey": sender.routing_key}
+            return {"status": "resuming", "routingKey": sender.routing_key}
+        else:
+            # Running — record activity and forward
+            sandbox_service.record_activity(route.sandbox_id)
+            asyncio.create_task(
+                forward_to_sandbox(
+                    sandbox_url=route.sandbox_url,
+                    body=body,
+                    sender_key=sender.routing_key,
+                    event_type=event_type,
+                )
+            )
+            return {"status": "forwarded", "routingKey": sender.routing_key}
 
     # Unknown sender
     asyncio.create_task(

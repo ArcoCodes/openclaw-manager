@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime
 
+import httpx
 from e2b_code_interpreter import Sandbox
 
 from app.config import settings
@@ -18,6 +19,55 @@ class SandboxService:
     def __init__(self, storage: StorageService, gateway: GatewayClient) -> None:
         self.storage = storage
         self.gateway = gateway
+        self._activity: dict[str, datetime] = {}
+        self._resume_locks: dict[str, asyncio.Lock] = {}
+
+    # ── Activity tracking ────────────────────────────────────
+
+    def record_activity(self, sandbox_id: str) -> None:
+        """Update in-memory last-active timestamp."""
+        self._activity[sandbox_id] = datetime.utcnow()
+
+    def get_last_active(self, sandbox_id: str) -> datetime | None:
+        return self._activity.get(sandbox_id)
+
+    async def ensure_running(self, sandbox_id: str) -> SandboxMetadata:
+        """If the sandbox is paused, resume it; otherwise return metadata."""
+        lock = self._resume_locks.setdefault(sandbox_id, asyncio.Lock())
+        async with lock:
+            meta = await self.storage.get_sandbox(sandbox_id)
+            if meta is None:
+                raise ValueError(f"Sandbox {sandbox_id} not found")
+            if meta.state == "paused":
+                meta = await self.resume(sandbox_id)
+            self.record_activity(sandbox_id)
+            return meta
+
+    async def flush_activity(self) -> None:
+        """Batch-persist in-memory activity timestamps to S3 metadata."""
+        for sandbox_id, last_active in list(self._activity.items()):
+            try:
+                meta = await self.storage.get_sandbox(sandbox_id)
+                if meta is None:
+                    continue
+                meta.last_active_at = last_active
+                await self.storage.put_sandbox(meta)
+            except Exception:
+                logger.exception("Failed to flush activity for %s", sandbox_id)
+
+    async def init_activity_tracker(self) -> None:
+        """Load last_active_at from S3 into memory on startup."""
+        try:
+            all_sandboxes = await self.list_all()
+        except Exception:
+            logger.exception("Failed to load sandboxes for activity tracker")
+            return
+        now = datetime.utcnow()
+        for meta in all_sandboxes:
+            if meta.state == "running":
+                self._activity[meta.sandbox_id] = meta.last_active_at or now
+
+    # ── CRUD ────────────────────────────────────────────────
 
     async def create(
         self,
@@ -50,7 +100,31 @@ class SandboxService:
 
         sandbox_id = sandbox.sandbox_id
 
-        # 3. Run setup.sh (baked into template) in background
+        # 3. Restore userdata backup if one exists
+        if apple_id:
+            backup_data = await self.storage.download_userdata(apple_id)
+        else:
+            backup_data = None
+        if backup_data is not None:
+            logger.info(
+                "Restoring userdata backup for %s into sandbox %s (%d bytes)",
+                apple_id, sandbox_id, len(backup_data),
+            )
+            upload_url = await asyncio.to_thread(
+                sandbox.upload_url, "/tmp/userdata.tar.gz"
+            )
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.put(upload_url, content=backup_data)
+                resp.raise_for_status()
+            await asyncio.to_thread(
+                sandbox.commands.run,
+                "tar xzf /tmp/userdata.tar.gz -C /home/user",
+                timeout=120,
+            )
+            logger.info("Userdata restored for %s", apple_id)
+
+        # 4. Run setup.sh (baked into template) in background
+        #    This overwrites config and plugins, which is expected.
         logger.info("Running setup.sh in sandbox %s", sandbox_id)
         await asyncio.to_thread(
             sandbox.commands.run,
@@ -59,7 +133,7 @@ class SandboxService:
             timeout=300,
         )
 
-        # 4. Get public URL
+        # 5. Get public URL
         public_url = f"https://{sandbox.get_host(port)}"
 
         now = datetime.utcnow()
@@ -75,14 +149,15 @@ class SandboxService:
             last_renewed_at=now,
         )
 
-        # 5. Persist to S3
+        # 6. Persist to S3
         await self.storage.put_sandbox(meta)
         await self.storage.add_to_index(sandbox_id)
 
-        # 6. Update route mapping if apple_id provided
+        # 7. Update route mapping if apple_id provided
         if apple_id:
             await self._set_route(meta)
 
+        self.record_activity(sandbox_id)
         logger.info("Created sandbox %s for %s", sandbox_id, email)
         return meta
 
@@ -104,6 +179,11 @@ class SandboxService:
 
         meta.state = "paused"
         await self.storage.put_sandbox(meta)
+
+        # Update route mapping state
+        if meta.apple_id:
+            await self._set_route(meta, state="paused")
+
         logger.info("Paused sandbox %s", sandbox_id)
         return meta
 
@@ -154,6 +234,10 @@ class SandboxService:
         if meta.apple_id:
             await self._remove_route(meta.apple_id)
 
+        # Clean up in-memory tracking
+        self._activity.pop(sandbox_id, None)
+        self._resume_locks.pop(sandbox_id, None)
+
         logger.info("Killed sandbox %s", sandbox_id)
         return meta
 
@@ -163,7 +247,60 @@ class SandboxService:
         await self.pause(sandbox_id)
         return await self.resume(sandbox_id)
 
-    async def _set_route(self, meta: SandboxMetadata) -> None:
+    async def backup(self, sandbox_id: str) -> SandboxMetadata:
+        """Tar the sandbox user-data dir and upload to S3."""
+        meta = await self.storage.get_sandbox(sandbox_id)
+        if meta is None:
+            raise ValueError(f"Sandbox {sandbox_id} not found")
+
+        if not meta.apple_id:
+            raise ValueError(f"Sandbox {sandbox_id} has no apple_id, cannot backup")
+
+        logger.info("Backing up sandbox %s (apple_id=%s)", sandbox_id, meta.apple_id)
+
+        # 1. Connect to the running sandbox
+        sandbox = await asyncio.to_thread(
+            Sandbox.connect, sandbox_id, api_key=settings.e2b_api_key
+        )
+
+        # 2. Tar the user-data directory
+        sandbox_dir = settings.backup_sandbox_dir
+        parent = sandbox_dir.rsplit("/", 1)[0] if "/" in sandbox_dir else "/"
+        dirname = sandbox_dir.rsplit("/", 1)[-1]
+        result = await asyncio.to_thread(
+            sandbox.commands.run,
+            f"tar czf /tmp/userdata.tar.gz -C {parent} {dirname}",
+            timeout=120,
+        )
+        if result.exit_code != 0:
+            raise RuntimeError(
+                f"tar failed (exit {result.exit_code}): {result.stderr}"
+            )
+
+        # 3. Download the tarball from the sandbox
+        download_url = await asyncio.to_thread(
+            sandbox.download_url, "/tmp/userdata.tar.gz"
+        )
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.get(download_url)
+            resp.raise_for_status()
+            data = resp.content
+
+        # 4. Upload to S3 keyed by apple_id
+        await self.storage.upload_userdata(meta.apple_id, data)
+
+        # 5. Update metadata
+        meta.last_backed_up_at = datetime.utcnow()
+        await self.storage.put_sandbox(meta)
+
+        logger.info(
+            "Backup complete for sandbox %s (%d bytes)", sandbox_id, len(data)
+        )
+        return meta
+
+    async def _set_route(
+        self, meta: SandboxMetadata, *, state: str = "running",
+    ) -> None:
         if not meta.apple_id:
             return
         mappings = await self.storage.get_route_mappings()
@@ -172,6 +309,7 @@ class SandboxService:
             sandbox_id=meta.sandbox_id,
             sandbox_url=meta.public_url,
             owner_email=meta.owner_email,
+            sandbox_state=state,
         )
         await self.storage.put_route_mappings(mappings)
 

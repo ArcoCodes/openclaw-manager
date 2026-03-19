@@ -8,7 +8,7 @@ from fastapi import FastAPI
 load_dotenv()
 
 from app.config import settings  # noqa: E402
-from app.dependencies import renewal_scheduler  # noqa: E402
+from app.dependencies import renewal_scheduler, sandbox_service  # noqa: E402
 from app.routers import cron, health, routes, sandbox, webhook  # noqa: E402
 
 logging.basicConfig(
@@ -20,6 +20,7 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     renewal_scheduler.start()
+    await sandbox_service.init_activity_tracker()
     yield
     renewal_scheduler.stop()
 
